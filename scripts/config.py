@@ -42,7 +42,7 @@ def load_env() -> dict:
     """Read .env file and return as dict."""
     if not ENV_FILE.is_file():
         print(f"Error: .env file not found at {ENV_FILE}")
-        print(f"Run this first:  cp env-example.txt .env  (then fill in your values)")
+        print(f"Run this first:  cp .env.example .env  (then fill in your values)")
         sys.exit(1)
 
     config = {}
