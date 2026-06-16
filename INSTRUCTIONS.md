@@ -6,9 +6,9 @@ Complete guide to backing up and restoring your OpenClaw agent. No advanced tech
 
 ## What Do These Scripts Do?
 
-- **backup.py** — Takes a snapshot of your entire OpenClaw agent (the `.openclaw` folder), compresses it, encrypts it with a password, and uploads it to a private GitHub repository. Large backups are automatically split into 95 MB chunks for GitHub compatibility. Each backup is saved with a timestamp so you can track versions, and the system keeps the 10 most recent backups automatically.
+- **backup.py** — Takes a snapshot of your OpenClaw agent (the `.openclaw` folder, plus any other folders you list in `SNAPSHOT_FOLDERS`), compresses it, encrypts it with a password, and uploads it to a private GitHub repository. Large backups are automatically split into 95 MB chunks for GitHub compatibility. Each backup is saved in its own folder — named `openclaw-<timestamp>` by default, or a custom name if you pass `--name` — and the system keeps the 10 most recent backups automatically.
 
-- **restore.py** — Downloads your backups from GitHub, lets you pick which version you want (or use command-line flags for automation), reassembles chunks if needed, verifies the backup integrity, decrypts it, and restores your `.openclaw` folder. Your agent is back, exactly how it was.
+- **restore.py** — Downloads your backups from GitHub, lets you pick which version you want (or use command-line flags for automation), reassembles chunks if needed, verifies the backup integrity, decrypts it, and restores your folders to their original locations. Your agent is back, exactly how it was.
 
 - **setup.py** — Sets up dependencies, installs GPG encryption tools, and connects to your GitHub repo. Safe to run multiple times — it will sync the latest backups from GitHub without deleting anything.
 
@@ -83,6 +83,16 @@ GITHUB_USERNAME=YourGitHubUsername
 REPO_NAME=openclaw-transport
 ```
 
+**Optional — back up more than just `.openclaw`.** Add a `SNAPSHOT_FOLDERS` line
+with a comma-separated list of folders relative to your home directory (e.g.
+`/home/coder`). Leave it out to back up only `.openclaw`:
+
+```
+SNAPSHOT_FOLDERS=.openclaw, projects, notes
+```
+
+Each entry can be a direct child of home or a nested path like `work/configs`.
+
 **Choose a strong backup password and remember it** — you'll need it if you ever restore on a machine that doesn't have this `.env` file.
 
 ### Step 5 — Run setup
@@ -134,22 +144,33 @@ Then run:
 python3 /path/to/openclaw-snapshot/scripts/backup.py
 ```
 
+To give the backup folder a custom name in GitHub (instead of the default
+`openclaw-<timestamp>`), add `--name`:
+
+```bash
+python3 /path/to/openclaw-snapshot/scripts/backup.py --name stable-config
+```
+
+The name may use letters, digits, `.`, `-` and `_` (no spaces or slashes). If you
+reuse a name, the new backup cleanly replaces the old folder of that name.
+
 **What happens:**
 
 1. It syncs the latest from GitHub (so existing backups from other workspaces are preserved)
-2. Your `.openclaw` folder gets compressed and encrypted
+2. The folders in `SNAPSHOT_FOLDERS` (default just `.openclaw`) get compressed and encrypted
 3. If the backup is larger than 95 MB, it's automatically split into chunks (see "Understanding Backup Chunks" below)
-4. A `manifest.json` file is created with metadata (timestamp, size, checksums, chunk info)
+4. A `manifest.json` file is created with metadata (name, timestamp, folders, size, checksums, chunk info)
 5. Everything gets pushed to your private GitHub repo
 
 You'll see:
 
 ```
+Folders to snapshot: .openclaw, projects
 Syncing with GitHub...
-Creating backup: openclaw-20260227-120000
-Backup created: openclaw-20260227-120000 (1542.3 MB, 3 part(s))
+Creating backup: stable-config
+Backup created: stable-config (1542.3 MB, 3 part(s))
 Pushed to GitHub
-Backup complete: 20260227-120000
+Backup complete: stable-config
 ```
 
 **Tip:** Run this before making big changes to your agent, or at the end of each day.
@@ -164,8 +185,8 @@ Backup complete: 20260227-120000
 
 ```
 openclaw-transport/backups/
-└── openclaw-20260227-120000/          ← Backup folder
-    ├── manifest.json                  ← Metadata (timestamp, size, checksum, etc.)
+└── openclaw-20260227-120000/          ← Backup folder (or your custom --name)
+    ├── manifest.json                  ← Metadata (name, timestamp, folders, size, checksum, etc.)
     ├── part-000.gpg                   ← Chunk 1 (95 MB)
     ├── part-001.gpg                   ← Chunk 2 (95 MB)
     └── part-002.gpg                   ← Chunk 3 (remainder)
@@ -205,10 +226,15 @@ Cloning backup repo...
 
 Available versions (4):
 ------------------------------------------------------------
-  [1] openclaw-20260227-120000  (1542.3 MB, 3 part(s)) ← latest
+  [1] stable-config  (1542.3 MB, 3 part(s)) ← latest
+        created: 20260227-120000
+        folders: .openclaw, projects
   [2] openclaw-20260226-090000  (1510.1 MB, single file)
+        folders: .openclaw
   [3] openclaw-20260225-150000  (1498.7 MB, 2 part(s))
+        folders: .openclaw
   [4] openclaw-20260225-103000  (1480.2 MB, single file)
+        folders: .openclaw
 ------------------------------------------------------------
 
 Select version [1] or press Enter for latest:
@@ -221,18 +247,18 @@ The script will:
 1. Download the backup from GitHub
 2. Reassemble chunks if needed
 3. Verify the checksum
-4. Decrypt and extract into your `.openclaw` folder
+4. Decrypt and extract your folders back to their original locations
 5. Clean up temporary files automatically
 
 You'll see:
 
 ```
-Restoring: openclaw-20260227-120000
+Restoring: stable-config
   Reassembling chunks...
   Checksum verified ✓
   Decrypting and extracting...
 
-Restored .openclaw from openclaw-20260227-120000
+Restored .openclaw, projects into /home/coder (from stable-config)
 ```
 
 ### Advanced restore modes
@@ -244,10 +270,12 @@ Use command-line flags for automation and scripting:
 python3 /path/to/openclaw-snapshot/scripts/restore.py --latest
 ```
 
-**Restore a specific version by timestamp:**
+**Restore a specific backup by its name (or timestamp):**
 ```bash
-python3 /path/to/openclaw-snapshot/scripts/restore.py --version 20260226-090000
+python3 /path/to/openclaw-snapshot/scripts/restore.py --name stable-config
+python3 /path/to/openclaw-snapshot/scripts/restore.py --name openclaw-20260226-090000
 ```
+(`--version` still works as an alias and also matches a timestamp.)
 
 **List all available backups and exit:**
 ```bash
@@ -342,10 +370,10 @@ openclaw-transport/
 ```
 
 **Key points:**
-- Each backup is a **folder** (not a single file) with a timestamp in its name
-- The `manifest.json` file contains metadata: checksum, chunk count, total size, etc.
+- Each backup is a **folder** (not a single file). Its name is `openclaw-<timestamp>` by default, or whatever you passed to `--name`
+- The `manifest.json` file contains metadata: backup name, timestamp, the folders included, checksum, chunk count, total size, etc.
 - `part-*.gpg` files are the encrypted chunks (each ~95 MB, or smaller for the last chunk)
-- The timestamp in the folder name is in UTC format (YYYYMMDD-HHMMSS)
+- The default timestamp in the folder name is in UTC format (YYYYMMDD-HHMMSS)
 
 **All backups are encrypted.** Without your `BACKUP_PASSWORD`, nobody can read them — not even someone with access to your GitHub repo.
 
@@ -354,7 +382,8 @@ openclaw-transport/
 ## What Gets Backed Up? What Doesn't?
 
 **Included:**
-- All of `.openclaw/` except items listed below
+- All of `.openclaw/` except the items listed below
+- Any additional folders you set in `SNAPSHOT_FOLDERS` (each backed up in full, minus the exclusions below)
 - Agent configuration, integrations, models, tools
 - Gmail, Google Calendar, Slack, Stripe, Vercel connector data
 - Local credentials (in `.openclaw/credentials/`)
@@ -379,9 +408,10 @@ openclaw-transport/
 | Install GPG (every new workspace)        | `sudo apt-get update && sudo apt-get install -y gnupg gpg-agent`         |
 | First-time setup / sync backups          | `python3 /path/to/scripts/setup.py`                                      |
 | Take a backup                            | `python3 /path/to/scripts/backup.py`                                     |
+| Take a backup with a custom name         | `python3 /path/to/scripts/backup.py --name stable-config`               |
 | Restore a version (interactive)          | `python3 /path/to/scripts/restore.py`                                    |
 | Restore latest (non-interactive)         | `python3 /path/to/scripts/restore.py --latest`                           |
-| Restore a specific version               | `python3 /path/to/scripts/restore.py --version 20260226-090000`          |
+| Restore a specific backup                | `python3 /path/to/scripts/restore.py --name stable-config`              |
 | List all available versions              | `python3 /path/to/scripts/restore.py --list`                             |
 | Restart OpenClaw after restore           | `openclaw gateway restart`                                                |
 
@@ -443,7 +473,7 @@ Try running restore again. If it persists, try restoring a different backup vers
 - **All your keys live in `.env`.** This is the only file you need to keep safe. Don't share it or commit it to a public repo.
 - **Backups are encrypted with AES-256.** Without your password, nobody can read them — not even someone with access to your GitHub repo.
 - **Each backup is a full snapshot**, not just the changes. Large agents can result in large backups.
-- **Restore does not delete existing files.** It extracts on top of your `.openclaw` folder — files from the backup get added or overwritten, but anything not in the backup stays untouched.
+- **Restore does not delete existing files.** It extracts your backed-up folders back into place — files from the backup get added or overwritten, but anything not in the backup stays untouched. (New backups restore each folder to its original spot under home; older `.openclaw`-only backups restore into `~/.openclaw`.)
 - **WhatsApp sessions and credentials are not included** in backups (they're workspace-specific). You'll need to reconnect WhatsApp after restoring on a new machine.
 - **Install GPG on every new workspace** before running backup or restore.
 - **Run setup.py to sync** if you've backed up from another workspace and need those backups available locally.
@@ -456,11 +486,12 @@ Try running restore again. If it persists, try restoring a different backup vers
 
 If you have **legacy backups** from older versions of this tool (single `.tgz.gpg` files instead of the newer folder format), the restore script still supports them. Legacy backups will appear in the version list and can be restored normally. No action needed — the system handles both formats automatically.
 
+Older folder-format backups that contained only `.openclaw` are also fully supported: the restore script detects their layout from the manifest and extracts them back into `~/.openclaw`, while newer backups (which may contain several folders) are restored to their original locations under your home directory. Both old `openclaw-<timestamp>` names and new custom names are listed and selectable side by side.
+
 ---
 
 ## Support & Feedback
 
 For issues, feature requests, or contributions: [GitHub Issues](https://github.com/KrishBhimani/openclaw-snapshot/issues)
 
-Last updated: April 15, 2026
-
+Last updated: June 16, 2026
