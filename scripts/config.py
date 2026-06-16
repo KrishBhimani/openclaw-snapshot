@@ -10,6 +10,33 @@ from pathlib import Path
 SKILL_DIR = Path(__file__).parent.parent
 ENV_FILE = SKILL_DIR / ".env"
 
+# What to snapshot when SNAPSHOT_FOLDERS is not set (backwards compatible).
+DEFAULT_SNAPSHOT_FOLDERS = [".openclaw"]
+
+
+def get_snapshot_folders(config: dict) -> list[str]:
+    """
+    Parse SNAPSHOT_FOLDERS into a clean list of paths, each interpreted
+    relative to the user's home directory.
+
+    SNAPSHOT_FOLDERS is a comma-separated list, e.g.:
+        SNAPSHOT_FOLDERS=.openclaw, projects, notes
+
+    Each entry may be a direct child of home (.openclaw) or a nested path
+    (projects/myapp). Leading/trailing slashes are stripped. If the value is
+    unset or empty, falls back to [".openclaw"] so existing setups keep working.
+    """
+    raw = (config.get("SNAPSHOT_FOLDERS") or "").strip()
+    if not raw:
+        return list(DEFAULT_SNAPSHOT_FOLDERS)
+
+    folders = []
+    for entry in raw.split(","):
+        entry = entry.strip().strip("/")
+        if entry and entry not in folders:
+            folders.append(entry)
+    return folders or list(DEFAULT_SNAPSHOT_FOLDERS)
+
 
 def load_env() -> dict:
     """Read .env file and return as dict."""
@@ -47,5 +74,9 @@ def get_config() -> dict:
         f"https://{config['GITHUB_PAT']}@github.com/"
         f"{config['GITHUB_USERNAME']}/{config['REPO_NAME']}.git"
     )
+
+    # Parsed list of folders to snapshot (relative to home). Defaults to
+    # [".openclaw"] when SNAPSHOT_FOLDERS is unset.
+    config["SNAPSHOT_FOLDERS_LIST"] = get_snapshot_folders(config)
 
     return config

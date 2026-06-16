@@ -5,7 +5,7 @@ Snapshot restore: clone repo → pick version → reassemble chunks → verify �
 Usage:
     python3 restore.py              # Interactive — prompts user to pick a version
     python3 restore.py --latest     # Restore the most recent backup (non-interactive)
-    python3 restore.py --version TIMESTAMP   # Restore a specific version
+    python3 restore.py --name NAME  # Restore a specific backup by its name (or timestamp)
     python3 restore.py --list       # List available versions and exit
 """
 
@@ -19,7 +19,11 @@ import tempfile
 from pathlib import Path
 from config import get_config
 
-RESTORE_DIR = Path.home() / ".openclaw"
+HOME = Path.home()
+# Legacy/old backups (no "layout" field in their manifest) were archived as the
+# *contents* of .openclaw, so they extract into ~/.openclaw. Newer backups carry
+# "layout": "home" and extract directly into $HOME.
+LEGACY_RESTORE_DIR = Path.home() / ".openclaw"
 TEMP_DIR = Path.home() / "openclaw-transport-temp"
 
 
@@ -54,6 +58,8 @@ def sha256_file(path: Path) -> str:
 def load_versions(backups_dir: Path) -> list[dict]:
     """
     Scan backups/ for version folders with manifest.json.
+    Folders may have custom names, so any directory containing a manifest.json
+    counts as a backup (not just openclaw-* ones).
     Also detects legacy single-file backups (pre-chunking format).
     Returns list of version dicts sorted newest first.
     """
@@ -62,14 +68,16 @@ def load_versions(backups_dir: Path) -> list[dict]:
     if not backups_dir.is_dir():
         return versions
 
-    # New format: folders with manifest.json
+    # New format: any folder with a manifest.json
     for d in backups_dir.iterdir():
-        if d.is_dir() and d.name.startswith("openclaw-"):
+        if d.is_dir():
             manifest_file = d / "manifest.json"
             if manifest_file.is_file():
                 manifest = json.loads(manifest_file.read_text())
                 manifest["_path"] = d
                 manifest["_format"] = "chunked"
+                # Display name: prefer the manifest's name, else the folder name
+                manifest["_name"] = manifest.get("name") or d.name
                 versions.append(manifest)
 
     # Legacy format: standalone .tgz.gpg files (backwards compatibility)
@@ -86,11 +94,17 @@ def load_versions(backups_dir: Path) -> list[dict]:
                 "parts": [f.name],
                 "_path": f,
                 "_format": "legacy",
+                "_name": f.name.replace(".tgz.gpg", ""),
             })
 
-    # Sort newest first
-    versions.sort(key=lambda v: v["timestamp"], reverse=True)
+    # Sort newest first by timestamp
+    versions.sort(key=lambda v: v.get("timestamp", ""), reverse=True)
     return versions
+
+
+def folder_names(version: dict) -> list[str]:
+    """Return the home-relative folders contained in a backup, for display."""
+    return [str(f) for f in (version.get("folders") or [])]
 
 
 def print_versions(versions: list[dict]):
@@ -101,7 +115,13 @@ def print_versions(versions: list[dict]):
         parts_info = f"{v['chunk_count']} part(s)" if v["chunked"] else "single file"
         label = " ← latest" if i == 1 else ""
         fmt = " [legacy]" if v.get("_format") == "legacy" else ""
-        print(f"  [{i}] openclaw-{v['timestamp']}  ({size}, {parts_info}){fmt}{label}")
+        print(f"  [{i}] {v['_name']}  ({size}, {parts_info}){fmt}{label}")
+        ts = v.get("timestamp")
+        if ts and ts not in v["_name"]:
+            print(f"        created: {ts}")
+        labels = folder_names(v)
+        if labels:
+            print(f"        folders: {', '.join(labels)}")
     print("-" * 60)
 
 
@@ -167,7 +187,14 @@ def restore_version(version: dict, password: str):
 
         # Decrypt and extract
         print("  Decrypting and extracting...")
-        RESTORE_DIR.mkdir(parents=True, exist_ok=True)
+
+        # New backups are rooted at $HOME (layout == "home"); legacy/old ones
+        # hold the contents of .openclaw and restore into ~/.openclaw.
+        if version.get("layout") == "home":
+            extract_dir = HOME
+        else:
+            extract_dir = LEGACY_RESTORE_DIR
+        extract_dir.mkdir(parents=True, exist_ok=True)
 
         gpg = subprocess.Popen(
             [
@@ -177,7 +204,7 @@ def restore_version(version: dict, password: str):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         tar = subprocess.Popen(
-            ["tar", "xzf", "-", "-C", str(RESTORE_DIR)],
+            ["tar", "xzf", "-", "-C", str(extract_dir)],
             stdin=gpg.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         gpg.stdout.close()
@@ -195,12 +222,20 @@ def restore_version(version: dict, password: str):
                 print(f"  tar: {tar_stderr.decode().strip()}")
             sys.exit(1)
 
+    # Describe what landed where, for the caller's summary message.
+    if version.get("layout") == "home" and version.get("folders"):
+        return f"{', '.join(folder_names(version))} into {HOME}"
+    return f".openclaw into {LEGACY_RESTORE_DIR}"
+
 
 def main():
     parser = argparse.ArgumentParser(description="Restore an OpenClaw snapshot")
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--latest", action="store_true", help="Restore the most recent backup")
-    group.add_argument("--version", type=str, help="Restore a specific version by timestamp")
+    group.add_argument(
+        "--name", "--version", dest="name", type=str,
+        help="Restore a specific backup by its name (or timestamp)",
+    )
     group.add_argument("--list", action="store_true", help="List available versions and exit")
     args = parser.parse_args()
 
@@ -240,11 +275,14 @@ def main():
         if args.latest:
             chosen = versions[0]
 
-        # --version TIMESTAMP: find matching version
-        elif args.version:
-            matches = [v for v in versions if v["timestamp"] == args.version]
+        # --name NAME: find a backup whose name (or timestamp) matches
+        elif args.name:
+            matches = [
+                v for v in versions
+                if v.get("_name") == args.name or v.get("timestamp") == args.name
+            ]
             if not matches:
-                print(f"Error: no backup found with timestamp '{args.version}'")
+                print(f"Error: no backup found named '{args.name}'")
                 print_versions(versions)
                 sys.exit(1)
             chosen = matches[0]
@@ -262,9 +300,9 @@ def main():
                     print("Invalid selection")
                     sys.exit(1)
 
-        print(f"\nRestoring: openclaw-{chosen['timestamp']}")
-        restore_version(chosen, password)
-        print(f"\nRestored .openclaw from openclaw-{chosen['timestamp']}")
+        print(f"\nRestoring: {chosen['_name']}")
+        restored = restore_version(chosen, password)
+        print(f"\nRestored {restored} (from {chosen['_name']})")
 
     finally:
         shutil.rmtree(TEMP_DIR, ignore_errors=True)
