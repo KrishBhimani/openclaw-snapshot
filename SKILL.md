@@ -12,7 +12,8 @@ description: >
 
 # Snapshot — OpenClaw Backup & Restore
 
-Encrypted backup and restore for the `~/.openclaw` agent folder.  
+Encrypted backup and restore for the `~/.openclaw` agent folder (and any other
+home-relative folders you configure).  
 Backups are GPG-encrypted, chunked for GitHub's 100MB file limit, and pushed to a private repo.
 
 ## How it works
@@ -21,16 +22,20 @@ Backups are GPG-encrypted, chunked for GitHub's 100MB file limit, and pushed to 
 - **restore** — clone repo → pick version → reassemble chunks → verify checksum → decrypt → extract
 - **setup** — install GPG, clone/init the GitHub transport repo
 
-Each backup version lives in its own folder with a manifest:
+By default only `~/.openclaw` is backed up. Set `SNAPSHOT_FOLDERS` in `.env` to back
+up additional folders (see Prerequisites below).
+
+Each backup version lives in its own folder with a manifest. The folder is named
+`openclaw-{timestamp}` by default, or a custom name if you pass `--name`:
 ```
-backups/openclaw-{timestamp}/
+backups/openclaw-{timestamp}/      (or backups/{custom-name}/)
 ├── manifest.json
 ├── part-000.gpg
 ├── part-001.gpg
 └── ...
 ```
 
-Last 10 backups are kept; older ones are auto-deleted.
+Last 10 backups are kept (by timestamp); older ones are auto-deleted.
 
 ---
 
@@ -50,6 +55,13 @@ GITHUB_USERNAME=<GitHub username>
 REPO_NAME=openclaw-transport
 ```
 
+Optional — back up more than just `.openclaw`. `SNAPSHOT_FOLDERS` is a
+comma-separated list of folders relative to home (e.g. `/home/coder`). Entries
+may be direct children of home or nested paths. Defaults to `.openclaw`:
+```
+SNAPSHOT_FOLDERS=.openclaw, projects, notes
+```
+
 ---
 
 ## Commands
@@ -59,8 +71,12 @@ All scripts live in the `scripts/` subdirectory of this skill.
 ### Take a backup
 ```bash
 python3 <skill-path>/scripts/backup.py
+
+# Give the backup folder a custom name in GitHub (instead of openclaw-<timestamp>)
+python3 <skill-path>/scripts/backup.py --name stable-config
 ```
 Non-interactive. Compresses, encrypts, chunks if needed, pushes to GitHub.  
+Backs up the folders listed in `SNAPSHOT_FOLDERS` (default `.openclaw`).  
 Auto-deletes versions older than the most recent 10.
 
 ### Restore a backup
@@ -68,8 +84,9 @@ Auto-deletes versions older than the most recent 10.
 # Restore the latest version (non-interactive, best for AI agents)
 python3 <skill-path>/scripts/restore.py --latest
 
-# Restore a specific version by timestamp
-python3 <skill-path>/scripts/restore.py --version 20260227-120000
+# Restore a specific backup by its name (or timestamp)
+python3 <skill-path>/scripts/restore.py --name stable-config
+python3 <skill-path>/scripts/restore.py --name openclaw-20260227-120000
 
 # List available versions without restoring
 python3 <skill-path>/scripts/restore.py --list
@@ -106,21 +123,23 @@ Safe to run multiple times. Installs GPG if missing, clones or syncs the transpo
 3. Present the version list to the user
 
 ### "Set up backups on this new workspace"
-1. Confirm the user has a `.env` file with credentials (help them create one from `env-example.txt` if not)
+1. Confirm the user has a `.env` file with credentials (help them create one from `.env.example` if not)
 2. Run `python3 <skill-path>/scripts/setup.py`
 
 ### "Restore a specific version"
 1. Run `python3 <skill-path>/scripts/setup.py`
 2. Run `python3 <skill-path>/scripts/restore.py --list` to show available versions
-3. Ask the user which timestamp they want
-4. Run `python3 <skill-path>/scripts/restore.py --version <timestamp>`
+3. Ask the user which backup they want (by name or timestamp)
+4. Run `python3 <skill-path>/scripts/restore.py --name <name>`
 
 ---
 
 ## Important notes
 
 - The `.env` file in this skill directory is **excluded from backups** (contains secrets).
-- The transport repo (`~/openclaw-transport/`) lives outside `.openclaw` and is not backed up.
-- The skill scripts themselves **are** backed up as part of `.openclaw`.
+- The transport repo (`~/openclaw-transport/`) lives outside the backed-up folders and is not backed up.
+- By default `.openclaw` is the only folder backed up; add more via `SNAPSHOT_FOLDERS`.
+- New backups are archived rooted at `$HOME` and restore each folder back to its
+  original place under home. Older `.openclaw`-only backups still restore into `~/.openclaw`.
 - WhatsApp sessions are excluded (workspace-specific). User must reconnect after restore.
 - After restoring, the user should restart their gateway to ensure all services pick up the restored state.
